@@ -19,7 +19,7 @@ const NARR=[["Nothing to see. Just an ordinary calendar. Perfectly ordinary.","D
 ["I have renamed things. They wanted new names.","{n} events. {n} chances for something to go wrong. I'm not saying it will.","Do you hear the ticking? That's just the clock. Probably."],
 ["THIS WEEK BELONGS TO US.","{e} has already happened. In another week. A darker week.","Every empty day is a door, and I left them all open."],
 ["WE ARE THE CALENDAR NOW.","There is no Monday. There was never a Monday.","Show the real names if you like. They won't stay real for long."]];
-let S=JSON.parse(localStorage.hc||"null")||{ev:[],first:Date.now(),visits:[]};const $=id=>document.getElementById(id),save=()=>localStorage.hc=JSON.stringify(S);
+let S=JSON.parse(localStorage.hc||"null")||{ev:[],first:Date.now(),visits:[]};const $=id=>document.getElementById(id);let save=()=>localStorage.hc=JSON.stringify(S);
 const td=new Date().toDateString();if(!S.visits.includes(td))S.visits.push(td);save();
 let real=false;
 function poss(){const days=Math.floor((Date.now()-S.first)/864e5);return Math.min(100,S.visits.length*12+days*4+S.ev.length*2-14)}
@@ -33,8 +33,8 @@ function render(){const p=Math.max(0,poss()),L=Math.min(5,Math.floor(p/18));$("l
 let tt;function type(s){clearInterval(tt);let i=0;const a=[...s];$("narr").textContent="";tt=setInterval(()=>{$("narr").textContent+=a[i++]||"";if(i>=a.length)clearInterval(tt)},35)}
 const esc=s=>s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const uid=()=>Math.random().toString(36).slice(2,10);
-$("date").value=new Date().toISOString().slice(0,10);
-$("add").onclick=()=>{const n=$("name").value.trim().slice(0,200);if(!n){type("Name it. Things without names are... worse.");$("name").focus();return}S.ev.push({id:uid(),name:n,date:$("date").value||new Date().toISOString().slice(0,10),time:$("time").value});save();$("name").value="";flick();render()};
+$("date").value=new Date(Date.now()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,10);
+$("add").onclick=()=>{const n=$("name").value.trim().slice(0,200);if(!n){type("Name it. Things without names are... worse.");$("name").focus();return}S.ev.push({id:uid(),name:n,date:$("date").value||new Date(Date.now()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,10),time:$("time").value});save();$("name").value="";flick();render()};
 $("list").onclick=e=>{const id=e.target.dataset.id;if(id){S.ev=S.ev.filter(x=>x.id!=id);save();render()}};
 $("real").onclick=()=>{real=!real;$("real").textContent=real?"🩸 Let them rename":"👁 Show real names";flick();render()};
 $("exo").onclick=e=>{e.preventDefault();if(confirm("Perform exorcism? Resets possession AND deletes all events.")){localStorage.removeItem("hc");location.reload()}};
@@ -59,3 +59,32 @@ function buildICS(){const L=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Haunted 
   if(e.rrule)L.push("RRULE:"+e.rrule);L.push("SUMMARY:"+icsEsc(e.name),"END:VEVENT")});L.push("END:VCALENDAR");return L.map(fold).join("\r\n")+"\r\n"}
 $("exp").onclick=()=>{if(!S.ev.length){type("There is nothing to export. Yet.");return}const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([buildICS()],{type:"text/calendar"}));a.download="real-events.ics";document.body.appendChild(a);a.click();a.remove();type("Fine. Take your 'real' names. I kept copies.")};
 render();
+// ---- import link, sync (QR/link) and backup ----
+const p2s=n=>String(n).padStart(2,"0"),okD=v=>typeof v=="string"&&/^\d{4}-\d{2}-\d{2}$/.test(v)&&!isNaN(new Date(v+"T00:00")),okT=v=>typeof v=="string"&&/^([01]\d|2[0-3]):[0-5]\d$/.test(v);
+const toM=t=>+t.slice(0,2)*60+ +t.slice(3);
+function cleanEv(e){if(!e||!okD(e.date))return null;return{id:String(e.id||uid()).replace(/[^\w.@-]/g,"").slice(0,80)||uid(),name:String(e.name||"Untitled").slice(0,200),date:e.date,time:okT(e.time)?e.time:"",dur:Math.max(1,Math.min(10080,+e.dur||60)),rrule:typeof e.rrule=="string"?e.rrule.replace(/[^\w=;,:+-]/g,"").slice(0,200):""}}
+const dupKey=e=>e.date+"|"+e.time+"|"+e.name.trim().toLowerCase();
+function modal(title,body,btns){const m=$("modal");$("mt").textContent=title;$("mb").textContent=body;$("mbtn").innerHTML="";btns.forEach(([t,f])=>{const b=document.createElement("button");b.textContent=t;b.onclick=()=>{m.hidden=true;f&&f()};$("mbtn").appendChild(b)});m.hidden=false}
+function clearHash(){if(/^#(import|sync)=/.test(location.hash))history.replaceState(null,"",location.pathname+location.search)}
+function linkEvents(list){return(list||[]).map(x=>{if(!x||!okD(x.date)||!okT(x.start))return null;let dur=60;if(okT(x.end)){dur=toM(x.end)-toM(x.start);if(dur<=0)dur+=1440}return cleanEv({name:String(x.title||x.name||"Untitled").trim()||"Untitled",date:x.date,time:x.start,dur,over:0})}).filter(Boolean)}
+function addEvents(list){const seen=new Set(S.ev.map(dupKey));let added=0,skip=0;list.forEach(e=>{if(seen.has(dupKey(e))||S.ev.some(x=>x.id==e.id)){skip++;return}seen.add(dupKey(e));S.ev.push(e);added++});save();flick();render();return{added,skip}}
+function importHash(){let list;try{let b=location.hash.slice(8).replace(/-/g,"+").replace(/_/g,"/");b+="=".repeat((4-b.length%4)%4);list=linkEvents(JSON.parse(decodeURIComponent(escape(atob(b)))).events)}catch(e){clearHash();return modal("The link is cursed","That import link didn't work.",[["OK"]])}
+ clearHash();if(!list.length)return modal("Nothing to summon","No valid events were in that link.",[["OK"]]);
+ const lines=list.map(e=>{const en=(toM(e.time)+e.dur)%1440;return`${new Date(e.date+"T00:00").toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"})} ${e.time}–${p2s(en/60|0)}:${p2s(en%60)}${toM(e.time)+e.dur>1440?" (overnight)":""} · ${e.name}`}).join("\n");
+ modal(`Summon ${list.length} event${list.length>1?"s":""}?`,lines+"\n\nDuplicates will be skipped.",[["Add them",()=>{const r=addEvents(list);type(`${r.added} new soul${r.added==1?"":"s"} joined.`+(r.skip?` ${r.skip} already lurked here.`:""))}],["Cancel",()=>type("Wise. Some things should stay outside.")]])}
+function payload(){return JSON.stringify({v:1,app:"haunted-calendar",hc:{ev:S.ev},t:Date.now()})}
+function syncLink(){return location.origin+location.pathname+"#sync="+LZString.compressToEncodedURIComponent(payload())}
+function drawSync(){const l=syncLink();$("sylink").value=l;try{const q=qrcode(0,"L");q.addData(l);q.make();$("qr").innerHTML=q.createSvgTag({cellSize:3,margin:2,scalable:true})}catch(e){$("qr").textContent="Too much data for a QR code. Use the link or a backup file."}}
+function receive(d){const ev=d&&d.hc&&Array.isArray(d.hc.ev)?d.hc.ev.map(cleanEv).filter(Boolean):null;clearHash();if(!ev)return modal("Not ours","That doesn't look like Haunted Calendar data.",[["OK"]]);
+ modal("Receive synced events?",`Incoming: ${ev.length} event${ev.length==1?"":"s"}${d.t?" (saved "+new Date(d.t).toLocaleString()+")":""}.\n\nMerge keeps what's here and adds new ones. Replace overwrites this device.`,[["Merge",()=>{const r=addEvents(ev);type(`Merged. ${r.added} new, ${r.skip} already here.`)}],["Replace",()=>{S.ev=ev;save();flick();render();type("The old calendar is gone. Only this one remains.")}],["Cancel"]])}
+function decode(c){c=(c||"").trim();if(c.includes("#sync="))c=c.split("#sync=")[1];const j=LZString.decompressFromEncodedURIComponent(c);if(!j)throw 0;return JSON.parse(j)}
+function syncHash(){let d;try{d=decode(location.hash)}catch(e){clearHash();return modal("The link is cursed","That sync link didn't work. Copy the whole link and try again.",[["OK"]])}receive(d)}
+$("sycopy").onclick=()=>{const t=$("sylink").value;(navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(()=>type("Copied. Take it to your other device."),()=>{$("sylink").select();document.execCommand("copy");type("Copied.")})};
+$("syref").onclick=drawSync;
+$("sygo").onclick=()=>{let d;try{d=decode($("sycode").value)}catch(e){return modal("The link is cursed","That sync code didn't work.",[["OK"]])}$("sycode").value="";receive(d)};
+$("bkexp").onclick=()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([payload()],{type:"application/json"}));a.download="haunted-calendar-backup-"+new Date(Date.now()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,10)+".json";document.body.appendChild(a);a.click();a.remove()};
+$("bkimp").onclick=()=>$("bkfile").click();
+$("bkfile").onchange=async e=>{const f=e.target.files[0];e.target.value="";if(!f)return;let d;try{d=JSON.parse(await f.text())}catch(err){return modal("Not ours","Not a valid backup file.",[["OK"]])}receive(d)};
+const _save=save;save=()=>{_save();drawSync&&$("sylink")&&drawSync()};
+function onHash(){if(location.hash.startsWith("#import="))importHash();else if(location.hash.startsWith("#sync="))syncHash()}
+drawSync();setTimeout(onHash,0);window.addEventListener("hashchange",onHash);
